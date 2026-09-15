@@ -1,0 +1,31 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# ===== 数据（不进 git，赛题要求大文件不入库）=====
+data/
+datasets/
+
+# ===== 模型权重 / checkpoint =====
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+# ===== 日志 / 实验输出 =====
+experiments/
+logs/
+runs/
+wandb/
+outputs/
+submission/
+
+# ===== 缓存 / 系统 =====
+*.log
+.DS_Store
+Thumbs.db

@@ -1,0 +1,18 @@
+# 深度学习框架
+torch>=2.0.0
+torchvision>=0.15.0
+
+# CLIP 骨干（赛题允许 OpenAI 官方权重，HF transformers 对应版本）
+transformers>=4.20.0
+
+# 数据处理与可视化
+numpy>=1.21
+pandas>=1.4
+pillow>=9.0
+opencv-python>=4.5
+tqdm
+pyyaml
+
+# 工具
+scikit-learn
+matplotlib

@@ -1,0 +1,28 @@
+# 算法4 CoOp + OPSD baseline 配置示例
+
+data:
+  train_dir: data/train            # 训练集（按类别文件夹组织）
+  val_list: null                   # 可选验证集列表
+  test_list: data/test.txt         # 测试图片列表
+  num_classes: 500                 # 初赛 500 / 复赛 750 / 半决赛 500
+
+model:
+  backbone: "ViT-B/32"             # CLIP ViT-B/32（强制）
+  peft: "coop"                     # linear_probe / coop / lora / adapter
+  prompt_length: 16                # CoOp 的 prompt token 数
+
+train:
+  epochs: 20
+  batch_size: 64
+  lr: 0.002
+  optimizer: "sgd"
+  num_workers: 4
+  seed: 42
+
+loss:
+  base: "sce"                      # ce / sce / gce / elr
+  self_distill_lambda: 0.1         # OPSD 自蒸馏 λ
+  self_distill_ramp_epochs: 10     # λ 线性增大的 epoch 数
+  warmup_epochs: 2                 # 自蒸馏 warmup（纯 CE）
+  use_wise_ft: true                # WiSE-FT 权重插值
+  wise_ft_alpha: 0.5
