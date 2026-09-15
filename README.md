@@ -29,5 +29,5 @@
 ---
 
 <div align="center">
-  <sub>Built with 💎 by <strong>AIC-2026</strong> — The True Challengers</sub>
+  <sub>Built with 💎 by <strong>spinner-bot</strong> — The True Challengers</sub>
 </div>
