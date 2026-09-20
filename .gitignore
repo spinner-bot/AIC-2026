@@ -11,6 +11,7 @@ data/
 datasets/
 
 # ===== 模型权重 / checkpoint =====
+models/
 *.pt
 *.pth
 *.ckpt
