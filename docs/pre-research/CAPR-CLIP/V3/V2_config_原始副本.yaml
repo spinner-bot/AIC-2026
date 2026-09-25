@@ -1,0 +1,98 @@
+# CAPR-CLIP 配置草案。
+# 字段用于约定技术路线，正式实现时应增加严格的 schema 校验。
+
+experiment:
+  name: capr_clip_stage1
+  seed: 42
+  output_dir: outputs/capr_clip_stage1
+
+data:
+  # 每个比赛阶段只允许指向该阶段的官方数据。
+  train_dir: data/train
+  test_list: data/test.txt
+  num_classes: 500
+  image_size: 224
+  val_ratio: 0.10
+  group_split: true              # 重复及近重复图必须留在同一数据折。
+  allow_truncated_images: true   # 官方说明中存在可由 Pillow 读取的截断图。
+
+model:
+  backbone: ViT-B/32
+  weights_source: openai         # 禁止替换为 LAION/OpenCLIP 等其他权重。
+  classifier: cosine
+  freeze_text_encoder: true
+  lora:
+    enabled: true
+    layers: last_4
+    targets: [q_proj, v_proj]
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+
+trust:
+  # q0 来自冻结特征，不由当前微调模型自评产生。
+  oof_folds: 3
+  knn_k: 20
+  use_oof_classifier: true
+  use_leave_one_out_prototype: true
+  use_mutual_knn: true
+  normalize_within_class: true
+  frozen_prior_floor: 0.50       # 动态更新后仍至少保留 50% 的独立先验。
+  temporal_ema: 0.90
+
+train:
+  head_warmup_epochs: 5
+  robust_epochs: 35
+  crt_epochs: 5
+  batch_size: 64
+  grad_accumulation_steps: 4
+  amp: true
+  optimizer: adamw
+  weight_decay: 0.05
+  grad_clip_norm: 1.0
+  lr:
+    classifier: 0.0005
+    lora: 0.0001
+    layer_norm: 0.00001
+  scheduler:
+    name: cosine
+    warmup_ratio: 0.05
+
+loss:
+  supervised: ce                # 第一轮对比 ce 与 gce，不同时叠加多个鲁棒损失。
+  label_smoothing: 0.0
+  soft_target_weight: 1.0
+  consistency_weight: 0.5
+  prototype_weight: 0.2
+  anchor:
+    min_weight: 0.01
+    uncertain_weight: 0.05      # 可信度越低，冻结特征锚定越强。
+
+pseudo_label:
+  enabled: false                # 最小可行版本稳定后再启用。
+  start_epoch: 10
+  confidence_threshold: 0.80
+  margin_threshold: 0.20
+  require_augmentation_agreement: true
+  require_knn_support: true
+  per_class_quota: true         # 防止伪标签集中到头部类别。
+
+long_tail:
+  method: crt                   # crt 与 logit_adjustment 先分别验证。
+  representation_sampling: natural
+  trusted_count_ema: 0.90
+  min_effective_count: 5.0
+
+augmentation:
+  random_resized_crop_scale: [0.80, 1.00]
+  horizontal_flip: true
+  color_jitter_strength: 0.20
+  random_erasing_probability: 0.0
+  cutmix_probability: 0.0
+
+inference:
+  # 最终评测严格保持一个 checkpoint、单裁剪、单次前向。
+  checkpoint: outputs/capr_clip_stage1/final.pt
+  center_crop: true
+  tta: false
+  output_csv: pred_results.csv
