@@ -1,0 +1,29 @@
+# CAPR-CLIP (AIC-2026 算法4) conda 环境定义
+#
+# 队友同步环境（一条命令）：
+#     conda env create -f environment.yml
+#     conda activate aic
+#
+# 说明：
+#   - torch 用 CUDA 12.8 版（cu128），向后兼容 RTX 30/40/50 全系，也兼容 AutoDL 常见镜像
+#   - 若机器无 NVIDIA GPU，把下面 torch/torchvision 的 +cu128 去掉，改装 CPU 版即可
+#   - 复现性关键包锁版本（torch/torchvision），其余用 loose 版本避免跨平台装不上
+
+name: aic
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - torch==2.11.0+cu128
+      - torchvision==0.26.0+cu128
+      - transformers
+      - faiss-cpu
+      - imagehash
+      - scikit-learn
+      - pandas
+      - opencv-python
+      - pyyaml
+      - tqdm
