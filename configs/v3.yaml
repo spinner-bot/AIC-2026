@@ -42,6 +42,7 @@ features:
 # ---- Stage 2：q0 可靠度系统 ----
 trust:
   oof_folds: 3
+  knn_k: 20                          # mutual-kNN 的 k（推荐比较 20 与 50）
   use_oof_classifier: true
   use_leave_one_out_prototype: true
   use_mutual_knn: true
