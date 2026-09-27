@@ -1,0 +1,96 @@
+# CAPR-CLIP V3 主线配置
+# 对应 docs/pre-research/CAPR-CLIP/V3/V3_技术路线.md 的 Stage 0~5 最小执行路径：
+#   B0 冻结 CLIP → B1 LoRA → R1 可靠度加权 CE/GCE → R2 自适应锚定 → L1 cRT
+#
+# 字段按 stage 分组，代码按 stage 读取对应 section。
+
+experiment:
+  name: capr_clip_v3
+  seed: 42
+  output_dir: outputs/capr_clip_v3
+
+data:
+  train_dir: data/train              # 按类别文件夹组织的含噪训练集
+  test_list: data/test.txt           # 测试图片文件名列表（一行一个）
+  num_classes: 500                   # 初赛 500 / 复赛 750 / 半决赛 500
+  image_size: 224
+  allow_truncated_images: true       # 官方说明存在 Pillow 可读的截断图
+
+# ---- Stage 0：数据审计与防泄漏 group split ----
+audit:
+  manifest_path: null                # 默认 {output_dir}/manifest.csv
+  anomaly_path: null                 # 默认 {output_dir}/anomaly.json
+  file_hash: sha256                  # 完全重复检测
+  phash_size: 8                      # 感知哈希尺寸（64-bit）
+  near_dup_hamming: 8                # phash 汉明距离 <= 该值视为近重复
+  group_split: true                  # 重复/近重复图必须留在同一数据折
+  val_ratio: 0.10                    # 固定 90/10 训练/验证
+  oof_folds: 3                       # 小类别不足以稳定划分时的固定三折 OOF
+  head_quantile: 0.33                # 头中尾分位数（固定一次，写入产物，后续实验不得重划）
+  tail_quantile: 0.33
+  min_samples_for_split: 10          # 类别样本量低于该值改用 OOF 划分
+
+# ---- Stage 1：冻结特征缓存 ----
+features:
+  cache_dir: null                    # 默认 {output_dir}/features
+  backbone: ViT-B/32
+  weights_source: openai             # 禁止替换为 LAION/OpenCLIP 等其他权重
+  batch_size: 64
+  knn_k: [20, 50]                    # mutual-kNN 推荐比较两个 k
+  use_faiss: true                    # 分块近邻搜索，禁止 100k 级全量两两矩阵
+
+# ---- Stage 2：q0 可靠度系统 ----
+trust:
+  oof_folds: 3
+  use_oof_classifier: true
+  use_leave_one_out_prototype: true
+  use_mutual_knn: true
+  use_gmm: false                     # 条件信号，默认关闭（分离度/样本量达标才启用）
+  gmm_min_component: 100
+  normalize_within_class: true
+  signal_weights: {cls: 1.0, proto: 1.0, knn: 1.0}
+  conflict_lambda: 0.1               # 信号冲突惩罚
+  q_min: 0.0
+  min_effective_count: 5.0           # 尾类最小可信质量
+
+# ---- Stage 3：模型与损失 ----
+model:
+  backbone: ViT-B/32
+  classifier: cosine
+  lora:
+    enabled: true
+    layers: last_4
+    targets: [q_proj, v_proj]
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+
+train:
+  head_warmup_epochs: 5
+  robust_epochs: 35
+  crt_epochs: 5
+  batch_size: 64
+  grad_accumulation_steps: 4
+  amp: true
+  optimizer: adamw
+  weight_decay: 0.05
+  grad_clip_norm: 1.0
+  lr: {classifier: 0.0005, lora: 0.0001, layer_norm: 0.00001}
+  scheduler: {name: cosine, warmup_ratio: 0.05}
+
+loss:
+  supervised: ce                     # 第一轮对比 ce 与 gce，不同时叠加多个鲁棒损失
+  anchor:
+    min_weight: 0.01
+    uncertain_weight: 0.05           # 可信度越低，冻结特征锚定越强
+
+# ---- Stage 5：延迟长尾校准 ----
+long_tail:
+  method: crt                        # crt / logit_adjustment / bs_crt / label_smoothing 互斥
+  representation_sampling: natural
+
+inference:
+  checkpoint: null                   # 默认 {output_dir}/final.pt
+  center_crop: true
+  tta: false                         # 单模型、单裁剪、单次前向
+  output_csv: pred_results.csv
