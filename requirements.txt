@@ -1,17 +1,30 @@
-# 深度学习框架
-torch>=2.0.0
-torchvision>=0.15.0
+# CAPR-CLIP (AIC-2026 算法4) pip 依赖清单
+#
+# 两种复现方式任选其一，结果一致：
+#   1) 推荐 conda（含 Python 3.11 环境）：conda env create -f environment.yml && conda activate aic
+#   2) 纯 pip（已有 Python 3.11）：pip install -r requirements.txt
+#
+# torch 用 CUDA 12.8 版（cu128），向后兼容 RTX 30/40/50 全系与 AutoDL 镜像；
+# 无 NVIDIA GPU 时，把下面 torch/torchvision 的 +cu128 后缀去掉，改装 CPU 版。
+
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
 
 # CLIP 骨干（赛题允许 OpenAI 官方权重，HF transformers 对应版本）
-transformers>=4.20.0
+transformers
 
-# 数据处理与可视化
-numpy>=1.21
-pandas>=1.4
-pillow>=9.0
-opencv-python>=4.5
-tqdm
+# 特征检索 / 感知哈希（Stage 1/2 依赖）
+faiss-cpu
+imagehash
+
+# 数据处理
+numpy
+pandas
+pillow
+opencv-python
 pyyaml
+tqdm
 
 # 工具
 scikit-learn
