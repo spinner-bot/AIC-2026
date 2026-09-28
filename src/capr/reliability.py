@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 from scipy.stats import rankdata
 
@@ -111,19 +113,30 @@ def compute_q0(
     min_eff = float(trust_cfg.get("min_effective_count", 5.0))
     weights = trust_cfg.get("signal_weights", None)
 
+    started = time.monotonic()
+    print(f"  [1/4] OOF 余弦分类器信号（{oof_folds} 折）...", flush=True)
     s_cls, losses = compute_oof_signal(
         feats, labels, num_classes, n_folds=oof_folds, seed=seed
     )
+    print(f"  [1/4] OOF 完成，用时 {time.monotonic() - started:.1f}s", flush=True)
+
+    print("  [2/4] 留一鲁棒原型信号...", flush=True)
     s_proto = compute_prototype_signal(feats, labels, num_classes)
+    print(f"  [2/4] 原型完成，累计 {time.monotonic() - started:.1f}s", flush=True)
+
+    print(f"  [3/4] mutual-kNN 信号（faiss，k={knn_k}）...", flush=True)
     s_knn = compute_mutual_knn_signal(feats, labels, k=knn_k)
+    print(f"  [3/4] kNN 完成，累计 {time.monotonic() - started:.1f}s", flush=True)
 
     s_gmm = None
     if use_gmm:
         s_gmm = compute_gmm_signal(losses, min_component=int(trust_cfg.get("gmm_min_component", 100)))
 
+    print("  [4/4] 融合 + 尾类保护...", flush=True)
     signal_map = {"cls": s_cls, "proto": s_proto, "knn": s_knn, "gmm": s_gmm}
     q0 = fuse_q0(signal_map, labels, signal_weights=weights, conflict_lambda=conflict_lambda, q_min=q_min)
     q0 = apply_tail_protection(q0, labels, min_effective_count=min_eff)
+    print(f"  [4/4] 完成，总用时 {time.monotonic() - started:.1f}s", flush=True)
 
     signals = {"cls": s_cls, "proto": s_proto, "knn": s_knn, "gmm": s_gmm, "losses": losses}
     return q0, signals
