@@ -28,6 +28,9 @@ data/
 
 ## 下载后校验
 
+数据清洗脚本的 Windows、Linux 和 macOS 终端用法见
+[`docs/DATA_CLEANING_CLI.md`](docs/DATA_CLEANING_CLI.md)。
+
 ```bash
 python scripts/check_data.py --config configs/v3.yaml
 ```
