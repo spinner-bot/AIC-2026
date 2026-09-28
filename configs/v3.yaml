@@ -36,6 +36,7 @@ features:
   backbone: ViT-B/32
   weights_source: openai             # 禁止替换为 LAION/OpenCLIP 等其他权重
   batch_size: 64
+  num_workers: 0                     # Windows 多进程 DataLoader 卡死，保持单进程
   knn_k: [20, 50]                    # mutual-kNN 推荐比较两个 k
   use_faiss: true                    # 分块近邻搜索，禁止 100k 级全量两两矩阵
 

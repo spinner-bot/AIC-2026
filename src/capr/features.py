@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import numpy as np
@@ -65,13 +66,19 @@ def extract_features(
     subset = subset.reset_index(drop=True)
 
     ds = _ManifestImageDataset(subset["path"].tolist(), processor)
-    loader = DataLoader(ds, batch_size=int(cfg.features.get("batch_size", 64)), num_workers=0)
+    loader = DataLoader(
+        ds,
+        batch_size=int(cfg.features.get("batch_size", 64)),
+        num_workers=int(cfg.features.get("num_workers", 0)),
+    )
 
     dim = int(model.config.projection_dim)  # ViT-B/32 -> 512
     feats = np.zeros((len(subset), dim), dtype=np.float32)
 
+    total = len(subset)
+    started = time.monotonic()
     start = 0
-    for batch in loader:
+    for i, batch in enumerate(loader, start=1):
         batch = batch.to(device_obj)
         # transformers 5.x: get_image_features 返回 BaseModelOutputWithPooling，
         # 图像特征在 .pooler_output（512 维，即 CLIP image_embeds）
@@ -80,6 +87,9 @@ def extract_features(
         end = start + batch.size(0)
         feats[start:end] = z.cpu().numpy()
         start = end
+        if i % 100 == 0 or end == total:
+            elapsed = max(time.monotonic() - started, 0.001)
+            print(f"  {end}/{total} ({end / total:.1%})，{end / elapsed:.1f} 张/秒", flush=True)
 
     return feats, subset
 
