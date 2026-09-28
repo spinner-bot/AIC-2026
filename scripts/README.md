@@ -10,6 +10,8 @@
 
 ## V3 数据清洗
 
+完整终端教程见 [`docs/DATA_CLEANING_CLI.md`](../docs/DATA_CLEANING_CLI.md)。
+
 原始 ZIP 不会被修改。可读截断图保留；不可读项写入异常清单；训练集的
 完全重复和近重复图保留并归入同一 group；测试集只做完整性审计，不参与
 训练统计。
