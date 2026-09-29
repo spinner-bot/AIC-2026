@@ -74,6 +74,7 @@ train:
   batch_size: 64
   grad_accumulation_steps: 4
   amp: true
+  grad_scaler_init_scale: 2048        # fp16 梯度×scale 溢出产生 NaN（非 inf，GradScaler 无法自愈），保守初始值
   optimizer: adamw
   weight_decay: 0.05
   grad_clip_norm: 1.0
