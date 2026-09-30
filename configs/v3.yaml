@@ -36,7 +36,7 @@ features:
   backbone: ViT-B/32
   weights_source: openai             # 禁止替换为 LAION/OpenCLIP 等其他权重
   batch_size: 64
-  num_workers: 0                     # Windows 多进程 DataLoader 卡死，保持单进程
+  num_workers: 4                     # Windows 多进程卡死保持 0；AutoDL/Linux 可设 4~8
   knn_k: [20, 50]                    # mutual-kNN 推荐比较两个 k
   use_faiss: true                    # 分块近邻搜索，禁止 100k 级全量两两矩阵
 
@@ -72,6 +72,7 @@ train:
   robust_epochs: 35
   crt_epochs: 5
   batch_size: 64
+  num_workers: 4                      # Windows 保持 0（多进程 DataLoader 卡死）；AutoDL/Linux 设 4~8 加速数据加载
   grad_accumulation_steps: 4
   amp: true
   grad_scaler_init_scale: 2048        # fp16 梯度×scale 溢出产生 NaN（非 inf，GradScaler 无法自愈），保守初始值
