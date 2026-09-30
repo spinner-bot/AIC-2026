@@ -68,11 +68,19 @@ def main(config_path: str) -> None:
     train_feats = feats[train_mask]
     num_classes = int(split["class_idx"].max()) + 1
 
+    # 重复/近重复组 id（防泄漏）。缺失时回退为不分组并明确告警。
+    if "group_id" in split.columns:
+        train_groups = split.loc[train_mask, "group_id"].values
+    else:
+        train_groups = None
+        print("警告：split.csv 缺少 group_id 列，OOF/原型/kNN 将不排除同组重复图")
+
     print(f"== Stage 2 q0 诊断 ==")
     print(f"训练样本 {len(train_labels)}，类别数 {num_classes}")
 
     q0, signals = compute_q0(
-        train_feats, train_labels, num_classes, cfg.trust.to_dict(), seed=int(cfg.experiment.get("seed", 42))
+        train_feats, train_labels, num_classes, cfg.trust.to_dict(),
+        groups=train_groups, seed=int(cfg.experiment.get("seed", 42))
     )
 
     # 写回 q0（训练样本有值，val 为 NaN）

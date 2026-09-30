@@ -99,10 +99,13 @@ def compute_q0(
     labels: np.ndarray,
     num_classes: int,
     trust_cfg: dict,
+    groups: np.ndarray | None = None,
     seed: int = 42,
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     """完整 q0 计算：四信号 + 融合 + 尾类保护。
 
+    groups：重复/近重复组 id（同组样本须留在同一折、互相排除），传入时
+    OOF/原型/kNN 三信号全部 group-aware（V3 3.2 防泄漏）。
     返回 (q0, signals)。signals 含 cls/proto/knn/gmm（gmm 可能为 None）与 losses。
     """
     use_gmm = bool(trust_cfg.get("use_gmm", False))
@@ -116,16 +119,16 @@ def compute_q0(
     started = time.monotonic()
     print(f"  [1/4] OOF 余弦分类器信号（{oof_folds} 折）...", flush=True)
     s_cls, losses = compute_oof_signal(
-        feats, labels, num_classes, n_folds=oof_folds, seed=seed
+        feats, labels, num_classes, groups=groups, n_folds=oof_folds, seed=seed
     )
     print(f"  [1/4] OOF 完成，用时 {time.monotonic() - started:.1f}s", flush=True)
 
     print("  [2/4] 留一鲁棒原型信号...", flush=True)
-    s_proto = compute_prototype_signal(feats, labels, num_classes)
+    s_proto = compute_prototype_signal(feats, labels, num_classes, groups=groups)
     print(f"  [2/4] 原型完成，累计 {time.monotonic() - started:.1f}s", flush=True)
 
     print(f"  [3/4] mutual-kNN 信号（faiss，k={knn_k}）...", flush=True)
-    s_knn = compute_mutual_knn_signal(feats, labels, k=knn_k)
+    s_knn = compute_mutual_knn_signal(feats, labels, groups=groups, k=knn_k)
     print(f"  [3/4] kNN 完成，累计 {time.monotonic() - started:.1f}s", flush=True)
 
     s_gmm = None

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import numpy as np
 from sklearn.mixture import GaussianMixture
-from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.model_selection import GroupKFold, KFold, StratifiedKFold
 
 _EPS = 1e-8
 
@@ -43,10 +43,33 @@ def _softmax(logits: np.ndarray) -> np.ndarray:
     return exp / (exp.sum(axis=1, keepdims=True) + _EPS)
 
 
+def _group_kfold(
+    feats: np.ndarray,
+    labels: np.ndarray,
+    groups: np.ndarray,
+    n_folds: int,
+    seed: int,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """分层按组 K 折：优先 StratifiedGroupKFold，失败回退 GroupKFold。
+
+    保证重复/近重复组不跨折（V3 3.2 防泄漏）。混合标签组（近重复却标签不同）
+    会整体进入同一折，其样本按各自类别计入该折，仍满足防泄漏优先。
+    """
+    try:
+        from sklearn.model_selection import StratifiedGroupKFold
+
+        sgkf = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+        return list(sgkf.split(feats, labels, groups))
+    except (ValueError, ImportError):
+        gkf = GroupKFold(n_splits=n_folds)
+        return list(gkf.split(feats, labels, groups))
+
+
 def compute_oof_signal(
     feats: np.ndarray,
     labels: np.ndarray,
     num_classes: int,
+    groups: np.ndarray | None = None,
     n_folds: int = 3,
     scale: float = 20.0,
     seed: int = 42,
@@ -56,19 +79,23 @@ def compute_oof_signal(
     用 K 折（优先分层）划分，对每个折用其余折训练余弦分类器，预测本折样本，
     取 s_cls[i] = P(y_i | x_i)。同时返回 losses = -log P(y_i | x_i)（供 GMM 使用）。
 
+    传入 groups 时改用分层按组划分，杜绝 OOF 阶段同组近重复互喂（V3 3.2）。
     该信号仍继承标签噪声，仅作为带偏差的判别证据（V3 4.2）。
     """
     n = len(labels)
     s_cls = np.zeros(n, dtype=np.float32)
     losses = np.zeros(n, dtype=np.float32)
 
-    try:
-        kf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
-        splits = list(kf.split(feats, labels))
-    except ValueError:
-        # 某些类别样本量 < n_folds，退化为随机 KFold
-        kf = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
-        splits = list(kf.split(feats))
+    if groups is not None:
+        splits = _group_kfold(feats, labels, np.asarray(groups), n_folds, seed)
+    else:
+        try:
+            kf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+            splits = list(kf.split(feats, labels))
+        except ValueError:
+            # 某些类别样本量 < n_folds，退化为随机 KFold
+            kf = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
+            splits = list(kf.split(feats))
 
     for train_idx, test_idx in splits:
         protos = _prototypes(feats[train_idx], labels[train_idx], num_classes)
@@ -85,13 +112,15 @@ def compute_prototype_signal(
     feats: np.ndarray,
     labels: np.ndarray,
     num_classes: int,
+    groups: np.ndarray | None = None,
     shrink_tau: float = 10.0,
 ) -> np.ndarray:
-    """留一鲁棒原型信号。
+    """留一/留一组鲁棒原型信号。
 
     原型收缩：p_c = ρ_c·p_c^local + (1-ρ_c)·p_global，ρ_c = n_c/(n_c + τ)
     随有效样本量增加而增加；小类别向全局原型收缩（V3 4.2）。
-    留一：p_{y_i}^{-i} 通过减去样本自身贡献精确计算。
+    传入 groups 时改「留一组」：从类内和里减去同组所有同类样本贡献，避免近重复
+    把自身特征泄进原型（V3 3.2）。
 
     返回 s_proto[i] = cos(z_i, p_{y_i}^{-i}) - max_{c≠y_i} cos(z_i, p_c)。
     """
@@ -99,7 +128,7 @@ def compute_prototype_signal(
     z = _l2_normalize(feats)
     counts = np.bincount(labels, minlength=num_classes).astype(np.float32)
 
-    # 类内未归一化原型和（用于精确留一）与全局原型
+    # 类内未归一化原型和（用于精确留一/留一组）与全局原型
     local_sum = np.zeros((num_classes, d), dtype=np.float32)
     for c in range(num_classes):
         mask = labels == c
@@ -118,17 +147,35 @@ def compute_prototype_signal(
                 (rho[c] * p_local + (1 - rho[c]) * global_proto).reshape(1, -1)
             )[0]
 
+    # 组索引（留一组用）：group_id -> 样本下标列表
+    group_idx: dict[int, list[int]] | None = None
+    if groups is not None:
+        groups = np.asarray(groups)
+        group_idx = {}
+        for i in range(n):
+            group_idx.setdefault(int(groups[i]), []).append(i)
+
     s_proto = np.zeros(n, dtype=np.float32)
     for i in range(n):
         c = labels[i]
-        n_c = counts[c]
-        if n_c <= 1:
-            # 类别只有一个样本，留一原型退化为全局原型
+        n_c = int(counts[c])
+        if group_idx is None:
+            remain = local_sum[c] - feats[i]
+            remain_n = n_c - 1
+        else:
+            # 留一组：排除同组所有同类样本（含自身）
+            remain = local_sum[c]
+            remain_n = n_c
+            for j in group_idx[int(groups[i])]:
+                if labels[j] == c:
+                    remain = remain - feats[j]
+                    remain_n -= 1
+
+        if remain_n <= 0:
+            # 排除后无剩余同类样本，退化为全局原型
             p_leave = global_proto
         else:
-            # 留一：从类内和里减去样本自身，再收缩
-            leave_sum = local_sum[c] - feats[i]
-            p_leave_local = _l2_normalize(leave_sum.reshape(1, -1))[0]
+            p_leave_local = _l2_normalize(remain.reshape(1, -1))[0]
             p_leave = _l2_normalize(
                 (rho[c] * p_leave_local + (1 - rho[c]) * global_proto).reshape(1, -1)
             )[0]
@@ -156,23 +203,34 @@ def _mutual_knn_topk(
     return dist, idx
 
 
-def compute_mutual_knn_signal(feats: np.ndarray, labels: np.ndarray, k: int = 20) -> np.ndarray:
+def compute_mutual_knn_signal(
+    feats: np.ndarray,
+    labels: np.ndarray,
+    groups: np.ndarray | None = None,
+    k: int = 20,
+) -> np.ndarray:
     """mutual-kNN 局部信号。
 
     互惠约束：仅当 j 是 i 的 top-k 近邻且 i 也是 j 的 top-k 近邻时才建立连接。
+    传入 groups 时排除同组近重复（否则近重复互为近邻，邻域一致率被虚高）。
     邻域一致率（V3 4.2）：
         s_knn[i] = Σ_{j∈N_i} w_ij·1(y_j=y_i) / (Σ_{j∈N_i} w_ij + ε)，w_ij = max(cos, 0)
     """
     n = len(labels)
     z = _l2_normalize(feats)
     dist, idx = _mutual_knn_topk(feats, k)
+    groups_arr = np.asarray(groups) if groups is not None else None
 
-    # 构建每个样本的 top-k 邻居集合（排除自身）
+    # 构建每个样本的 top-k 邻居集合（排除自身，可选排除同组）
     neighbor_sets = [set() for _ in range(n)]
     for i in range(n):
+        gi = groups_arr[i] if groups_arr is not None else None
         for j in idx[i]:
-            if j != i:
-                neighbor_sets[i].add(int(j))
+            if j == i:
+                continue
+            if gi is not None and groups_arr[int(j)] == gi:
+                continue
+            neighbor_sets[i].add(int(j))
 
     s_knn = np.zeros(n, dtype=np.float32)
     for i in range(n):
