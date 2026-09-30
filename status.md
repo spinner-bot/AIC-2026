@@ -14,20 +14,21 @@
 - [x] 环境搭建（conda `aic` / torch 2.11+cu128 / CLIP ViT-B/32 权重下载）
 - [x] **Stage 0 数据清洗**：103218 训练 / 24967 测试，异常 0，500 类；5762 重复组（13062 张）；train/val 93097/10121；head/mid/tail 34715/35083/33420
 - [x] **Stage 1 冻结特征**：`features.npy` (103218, 512)，L2 归一化
-- [x] **Stage 2 q0 可靠度诊断**：OOF + 留一鲁棒原型 + mutual-kNN 融合 → `q0.csv` + `signals.npz`
-- [x] **Stage 3 MVP 微调**：分类头预热（缓存特征 5 epoch）+ 可靠度加权 LoRA 微调 + 自适应锚定
+- [x] **Stage 2 q0 可靠度诊断**：group-aware OOF + 留一组鲁棒原型 + 排除同组边的 mutual-kNN → `q0.csv` + `signals.npz`
+- [x] **Stage 3 v1 微调**：分类头预热（缓存特征 5 epoch）+ 可靠度加权 LoRA 微调 + 自适应锚定
       · AutoDL RTX 5090 完成 35 epoch，全程约 2 小时 29 分
       · 最佳 **val Top-1 = 68.20%**（epoch 1），末轮 64.77%
-      · best checkpoint 已落盘 `best.pt`；后期训练损失继续下降但验证准确率回落
+- [x] **Stage 3 v2 微调**：GCE + 轻量数据增强 + 强锚定 + 低学习率 + early stopping
+      · epoch-0 冻结特征基线 **val Top-1 = 66.39%**
+      · 完成 15 epoch，全程约 1 小时 22 分；最佳 **69.74%**（epoch 13），末轮 69.68%
+      · 比 v1 最佳提升 **1.54 个百分点**，best checkpoint 已落盘 `best.pt`
 
 ## In Progress
 
-- Stage 3 结果复盘与短程早停实验设计
+- Stage 3 v2 结果复盘与消融实验设计
 
 ## Upcoming
 
-- [ ] 评估并保存分类头预热后的 epoch-0 基线，加入 early stopping
-- [ ] 修复 Stage 2 重复组在 OOF / 原型 / kNN 中的组内泄漏后重算 q0
 - [ ] 对 B0 / B1 / R1 / R2 做固定划分、短程、多种子消融
 - [ ] **Stage 5 延迟分类器校准**（数据近似均衡，作为条件分支而非默认主线）
 - [ ] Stage 6 容量与分辨率 / Stage 7 阶段重训
