@@ -245,11 +245,12 @@ def main(cfg: Config, device: str = "cuda", epochs: int | None = None) -> float:
 
     # 2) robust 微调
     bs = int(cfg.train.get("batch_size", 64))
+    num_workers = int(cfg.train.get("num_workers", 0))
     train_loader = DataLoader(
-        train_ds, batch_size=bs, shuffle=True, num_workers=0, collate_fn=collate_fn("train")
+        train_ds, batch_size=bs, shuffle=True, num_workers=num_workers, collate_fn=collate_fn("train")
     )
     val_loader = DataLoader(
-        val_ds, batch_size=bs, shuffle=False, num_workers=0, collate_fn=collate_fn("val")
+        val_ds, batch_size=bs, shuffle=False, num_workers=num_workers, collate_fn=collate_fn("val")
     )
     robust_epochs = epochs if epochs is not None else int(cfg.train.get("robust_epochs", 35))
     return train_robust(model, train_loader, val_loader, cfg, device_obj, robust_epochs, out_dir, logger)

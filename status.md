@@ -1,6 +1,6 @@
 # Project Status
 
-> 更新于 2026-09-29
+> 更新于 2026-09-30
 
 ## Current Phase
 
@@ -16,16 +16,20 @@
 - [x] **Stage 1 冻结特征**：`features.npy` (103218, 512)，L2 归一化
 - [x] **Stage 2 q0 可靠度诊断**：OOF + 留一鲁棒原型 + mutual-kNN 融合 → `q0.csv` + `signals.npz`
 - [x] **Stage 3 MVP 微调**：分类头预热（缓存特征 5 epoch）+ 可靠度加权 LoRA 微调 + 自适应锚定
-      · 1-epoch 验证 **val Top-1 = 67.87%**，best checkpoint 落盘 `best.pt`
+      · AutoDL RTX 5090 完成 35 epoch，全程约 2 小时 29 分
+      · 最佳 **val Top-1 = 68.20%**（epoch 1），末轮 64.77%
+      · best checkpoint 已落盘 `best.pt`；后期训练损失继续下降但验证准确率回落
 
 ## In Progress
 
-- 无（主线 Stage 0~3 已打通，待跑全量 35 epoch）
+- Stage 3 结果复盘与短程早停实验设计
 
 ## Upcoming
 
-- [ ] **Stage 3 全量训练**：35 epoch（本地 5070 约 20h，建议上 AutoDL 5090）
-- [ ] **Stage 5 延迟 cRT 校准**（互斥比较 cRT / logit adjustment / BS-cRT）
+- [ ] 评估并保存分类头预热后的 epoch-0 基线，加入 early stopping
+- [ ] 修复 Stage 2 重复组在 OOF / 原型 / kNN 中的组内泄漏后重算 q0
+- [ ] 对 B0 / B1 / R1 / R2 做固定划分、短程、多种子消融
+- [ ] **Stage 5 延迟分类器校准**（数据近似均衡，作为条件分支而非默认主线）
 - [ ] Stage 6 容量与分辨率 / Stage 7 阶段重训
 - [ ] Final submission
 
