@@ -148,6 +148,8 @@ def train_robust(
 
     best_acc = 0.0
     best_path = out_dir / "best.pt"
+    patience = int(cfg.train.get("early_stop_patience", 0))
+    epochs_no_improve = 0
     global_step = 0
 
     for ep in range(epochs):
@@ -202,7 +204,14 @@ def train_robust(
         if val_acc > best_acc:
             best_acc = val_acc
             save_checkpoint(model, best_path)
+            epochs_no_improve = 0
             logger.info(f"  -> 保存 best checkpoint ({best_acc:.4f})")
+        else:
+            epochs_no_improve += 1
+
+        if patience > 0 and epochs_no_improve >= patience:
+            logger.info(f"  == 早停：连续 {patience} epoch 无提升，停止于 epoch {ep + 1} ==")
+            break
 
     logger.info(f"== robust 完成，best val Top-1 = {best_acc:.4f} ==")
     return best_acc
@@ -252,5 +261,8 @@ def main(cfg: Config, device: str = "cuda", epochs: int | None = None) -> float:
     val_loader = DataLoader(
         val_ds, batch_size=bs, shuffle=False, num_workers=num_workers, collate_fn=collate_fn("val")
     )
+    # epoch 0 基线：分类头预热后（冻结特征 + 余弦分类头），尚未 LoRA 微调
+    baseline_acc = evaluate(model, val_loader, device_obj)
+    logger.info(f"== epoch 0 基线（冻结特征 + 分类头预热）val_top1 = {baseline_acc:.4f} ==")
     robust_epochs = epochs if epochs is not None else int(cfg.train.get("robust_epochs", 35))
     return train_robust(model, train_loader, val_loader, cfg, device_obj, robust_epochs, out_dir, logger)

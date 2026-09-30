@@ -69,7 +69,8 @@ model:
 
 train:
   head_warmup_epochs: 5
-  robust_epochs: 35
+  robust_epochs: 15
+  early_stop_patience: 3             # 验证集连续 N epoch 无提升则早停
   crt_epochs: 5
   batch_size: 64
   num_workers: 4                      # Windows 保持 0（多进程 DataLoader 卡死）；AutoDL/Linux 设 4~8 加速数据加载
@@ -79,14 +80,14 @@ train:
   optimizer: adamw
   weight_decay: 0.05
   grad_clip_norm: 1.0
-  lr: {classifier: 0.0005, lora: 0.0001, layer_norm: 0.00001}
+  lr: {classifier: 0.0001, lora: 0.00003, layer_norm: 0.000003}
   scheduler: {name: cosine, warmup_ratio: 0.05}
 
 loss:
-  supervised: ce                     # 第一轮对比 ce 与 gce，不同时叠加多个鲁棒损失
+  supervised: gce                    # GCE 抗噪（q 越小越鲁棒）；ce/gce 二选一，不同时叠加
   anchor:
-    min_weight: 0.01
-    uncertain_weight: 0.05           # 可信度越低，冻结特征锚定越强
+    min_weight: 0.1
+    uncertain_weight: 0.5            # 可信度越低，冻结特征锚定越强
 
 # ---- Stage 5：延迟长尾校准 ----
 long_tail:

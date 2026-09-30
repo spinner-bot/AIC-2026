@@ -2,7 +2,7 @@
 
 从 split.csv + q0.csv + features.npy 一次性拼好样本表，Dataset 按行返回。
 特征缓存 z0 全量载入内存（约 190MB），训练时随 batch 转移到设备。
-图像预处理与 Stage 1 一致（CLIPProcessor 默认，MVP 无随机增强）。
+图像预处理：训练施加轻量随机增强，验证保持 CLIPProcessor 默认中心裁剪。
 """
 
 from __future__ import annotations
@@ -13,20 +13,37 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 from transformers import CLIPProcessor
+import torchvision.transforms as T
+
+
+_train_aug = T.Compose(
+    [
+        T.RandomResizedCrop(224, scale=(0.6, 1.0)),
+        T.RandomHorizontalFlip(p=0.5),
+        T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
+    ]
+)
 
 
 class TrainDataset(Dataset):
-    """训练样本：返回 (pixel_values, class_idx, q0, z0)。"""
+    """训练样本：返回 (pixel_values, class_idx, q0, z0)。
+
+    训练时施加轻量随机增强（随机裁剪 + 水平翻转 + 弱色彩），防过拟合；
+    验证集保持单一中心裁剪。z0 是 Stage 1 冻结特征（原始中心裁剪），
+    锚定损失用它约束增强后的特征不漂移。
+    """
 
     def __init__(
         self,
         items: pd.DataFrame,
         z0: np.ndarray,
         processor: CLIPProcessor,
+        augment: bool = True,
     ) -> None:
         self.items = items.reset_index(drop=True)
         self.z0 = torch.from_numpy(np.asarray(z0, dtype=np.float32))
         self.processor = processor
+        self.aug = _train_aug if augment else None
 
     def __len__(self) -> int:
         return len(self.items)
@@ -34,6 +51,8 @@ class TrainDataset(Dataset):
     def __getitem__(self, i: int):
         row = self.items.iloc[i]
         img = Image.open(row["path"]).convert("RGB")
+        if self.aug is not None:
+            img = self.aug(img)
         px = self.processor(images=img, return_tensors="pt")["pixel_values"][0]
         return (
             px,
