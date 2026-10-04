@@ -16,21 +16,23 @@ from transformers import CLIPProcessor
 import torchvision.transforms as T
 
 
-_train_aug = T.Compose(
-    [
-        T.RandomResizedCrop(224, scale=(0.5, 1.0)),
-        T.RandomHorizontalFlip(p=0.5),
-        # RandAugment：细粒度识别标配，比单一 ColorJitter 提供更强的变换多样性，
-        # 同时作为正则化抑制噪声标签过拟合（含 Color/Contrast/Brightness 等子操作）。
-        T.RandAugment(num_ops=2, magnitude=9),
-    ]
-)
+def make_train_aug(image_size: int = 224) -> T.Compose:
+    """训练增强（分辨率可配，供高分辨率实验用）。"""
+    return T.Compose(
+        [
+            T.RandomResizedCrop(image_size, scale=(0.5, 1.0)),
+            T.RandomHorizontalFlip(p=0.5),
+            # RandAugment：细粒度识别标配，比单一 ColorJitter 提供更强的变换多样性，
+            # 同时作为正则化抑制噪声标签过拟合（含 Color/Contrast/Brightness 等子操作）。
+            T.RandAugment(num_ops=2, magnitude=9),
+        ]
+    )
 
 
 class TrainDataset(Dataset):
     """训练样本：返回 (pixel_values, class_idx, q0, z0)。
 
-    训练时施加轻量随机增强（随机裁剪 + 水平翻转 + 弱色彩），防过拟合；
+    训练时施加随机增强（RandAugment），防过拟合；
     验证集保持单一中心裁剪。z0 是 Stage 1 冻结特征（原始中心裁剪），
     锚定损失用它约束增强后的特征不漂移。
     """
@@ -40,12 +42,13 @@ class TrainDataset(Dataset):
         items: pd.DataFrame,
         z0: np.ndarray,
         processor: CLIPProcessor,
+        image_size: int = 224,
         augment: bool = True,
     ) -> None:
         self.items = items.reset_index(drop=True)
         self.z0 = torch.from_numpy(np.asarray(z0, dtype=np.float32))
         self.processor = processor
-        self.aug = _train_aug if augment else None
+        self.aug = make_train_aug(image_size) if augment else None
 
     def __len__(self) -> int:
         return len(self.items)
@@ -104,6 +107,7 @@ def build_datasets(
     q0: pd.DataFrame,
     feats: np.ndarray,
     processor: CLIPProcessor,
+    image_size: int = 224,
 ) -> tuple[TrainDataset, ValDataset, pd.DataFrame, pd.DataFrame]:
     """按 fold 划分训练/验证，并返回各自样本表（含 class_idx/q0 列）。"""
     train_mask = split["fold"] != "val"
@@ -115,6 +119,6 @@ def build_datasets(
 
     z0_train = feats[train_mask.values]
 
-    train_ds = TrainDataset(train_items, z0_train, processor)
+    train_ds = TrainDataset(train_items, z0_train, processor, image_size=image_size)
     val_ds = ValDataset(val_items, processor)
     return train_ds, val_ds, train_items, val_items

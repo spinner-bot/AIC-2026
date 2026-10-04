@@ -13,7 +13,7 @@ data:
   train_dir: data/train              # 按类别文件夹组织的含噪训练集
   test_list: data/test.txt           # 测试图片文件名列表（一行一个）
   num_classes: 500                   # 初赛 500 / 复赛 750 / 半决赛 500
-  image_size: 224
+  image_size: 288                # 224 → 288：细粒度高分辨率，ViT-B/32 patch 7×7→9×9
   allow_truncated_images: true       # 官方说明存在 Pillow 可读的截断图
 
 # ---- Stage 0：数据审计与防泄漏 group split ----
@@ -88,6 +88,11 @@ loss:
   anchor:
     min_weight: 0.1
     uncertain_weight: 0.5            # 可信度越低，冻结特征锚定越强
+
+# ---- 噪声硬处理：q0 硬丢弃 ----
+noise:
+  hard_drop: true               # 低可靠度样本不参与分类监督（防错误标签误导）
+  hard_threshold: 0.3           # q0 低于该值的样本 sup loss 权重置 0（q0 25分位≈0.30）
 
 # ---- Stage 5：延迟长尾校准 ----
 long_tail:

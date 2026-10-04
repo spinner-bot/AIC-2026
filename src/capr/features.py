@@ -41,7 +41,12 @@ class _ManifestImageDataset(Dataset):
 def _load_clip(cfg: Config, device: torch.device) -> tuple[CLIPModel, CLIPProcessor]:
     model_dir = project_root() / _CLIP_MODEL_DIR
     model = CLIPModel.from_pretrained(model_dir).to(device).eval()
-    processor = CLIPProcessor.from_pretrained(model_dir)
+    image_size = int(cfg.data.get("image_size", 224))
+    processor = CLIPProcessor.from_pretrained(
+        model_dir,
+        size={"height": image_size, "width": image_size},
+        crop_size={"height": image_size, "width": image_size},
+    )
     return model, processor
 
 
@@ -82,7 +87,7 @@ def extract_features(
         batch = batch.to(device_obj)
         # transformers 5.x: get_image_features 返回 BaseModelOutputWithPooling，
         # 图像特征在 .pooler_output（512 维，即 CLIP image_embeds）
-        z = model.get_image_features(pixel_values=batch).pooler_output
+        z = model.get_image_features(pixel_values=batch, interpolate_pos_encoding=True).pooler_output
         z = z / z.norm(dim=-1, keepdim=True)  # L2 归一化
         end = start + batch.size(0)
         feats[start:end] = z.cpu().numpy()

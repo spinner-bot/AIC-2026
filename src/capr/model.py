@@ -45,8 +45,12 @@ class CAPRModel(nn.Module):
         self.logit_scale = nn.Parameter(torch.tensor(math.log(init_logit_scale)))
 
     def _image_embeds(self, pixel_values: torch.Tensor) -> torch.Tensor:
-        """图像 -> L2 归一化特征 z。与 Stage 1 口径一致。"""
-        out = self.vision_model(pixel_values=pixel_values)
+        """图像 -> L2 归一化特征 z。与 Stage 1 口径一致。
+
+        interpolate_pos_encoding=True：高分辨率（如 288）时 transformers 自动
+        双线性插值位置编码（224 的 7×7 → 288 的 9×9），无需手动改 position_embedding。
+        """
+        out = self.vision_model(pixel_values=pixel_values, interpolate_pos_encoding=True)
         z = self.visual_projection(out.pooler_output)
         return z / (z.norm(dim=-1, keepdim=True) + _EPS)
 

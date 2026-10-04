@@ -70,12 +70,24 @@ def compute_total_loss(
     gce_q: float = 0.7,
     anchor_min: float = 0.01,
     anchor_uncertain: float = 0.05,
+    hard_threshold: float | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """统一损失入口，返回 (总损失, 分项标量用于日志)。"""
+    """统一损失入口，返回 (总损失, 分项标量用于日志)。
+
+    hard_threshold：q0 硬丢弃阈值。启用时 q0 低于该值的样本监督损失权重
+    置 0（视为噪声，不参与分类监督）；anchor 损失不受影响，仍对这些样本
+    施加更强锚定（低 q0 → λ 更大），两者互补。
+    """
+    # 硬丢弃：仅在监督项上对低可靠度样本置 0 权重
+    q_sup = q0
+    if hard_threshold is not None:
+        q_sup = q0.clone()
+        q_sup[q0 < hard_threshold] = 0.0
+
     if supervised == "ce":
-        l_sup = weighted_ce(logits, targets, q0)
+        l_sup = weighted_ce(logits, targets, q_sup)
     elif supervised == "gce":
-        l_sup = weighted_gce(logits, targets, q0, q=gce_q)
+        l_sup = weighted_gce(logits, targets, q_sup, q=gce_q)
     else:
         raise ValueError(f"未知监督损失: {supervised}（支持 ce/gce）")
 

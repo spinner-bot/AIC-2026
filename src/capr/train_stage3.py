@@ -126,6 +126,12 @@ def train_robust(
     anchor_min = float(cfg.loss.anchor.get("min_weight", 0.01))
     anchor_uncertain = float(cfg.loss.anchor.get("uncertain_weight", 0.05))
 
+    # 噪声硬处理：q0 硬丢弃阈值（启用时低可靠度样本不参与分类监督）
+    noise_cfg = cfg.get("noise", None)
+    hard_threshold = None
+    if noise_cfg is not None and noise_cfg.get("hard_drop", False):
+        hard_threshold = float(noise_cfg.get("hard_threshold", 0.3))
+
     # sched.step() 每 accum 个 batch 调用一次，故调度步数按 optimizer step 计算
     steps_per_epoch = max(1, math.ceil(len(train_loader.dataset) / train_loader.batch_size))
     opt_steps_per_epoch = max(1, math.ceil(steps_per_epoch / accum))
@@ -170,6 +176,7 @@ def train_robust(
                     logits, labels, z, z0, q0,
                     supervised=supervised, gce_q=gce_q,
                     anchor_min=anchor_min, anchor_uncertain=anchor_uncertain,
+                    hard_threshold=hard_threshold,
                 )
             loss = loss / accum
 
@@ -238,9 +245,16 @@ def main(cfg: Config, device: str = "cuda", epochs: int | None = None) -> float:
     assert len(split) == len(feats), "split 与 features 行数不一致"
 
     num_classes = int(split["class_idx"].max()) + 1
-    processor = CLIPProcessor.from_pretrained(str(project_root() / _CLIP_MODEL_DIR))
+    image_size = int(cfg.data.get("image_size", 224))
+    processor = CLIPProcessor.from_pretrained(
+        str(project_root() / _CLIP_MODEL_DIR),
+        size={"height": image_size, "width": image_size},
+        crop_size={"height": image_size, "width": image_size},
+    )
 
-    train_ds, val_ds, train_items, _ = build_datasets(split, q0, feats, processor)
+    train_ds, val_ds, train_items, _ = build_datasets(
+        split, q0, feats, processor, image_size=image_size
+    )
     logger.info(f"== Stage 3 MVP 微调 ==")
     logger.info(f"  训练 {len(train_ds)} / 验证 {len(val_ds)} / 类别 {num_classes}")
 
