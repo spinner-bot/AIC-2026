@@ -125,6 +125,9 @@ def train_robust(
     gce_q = float(cfg.loss.get("gce_q", 0.7))
     anchor_min = float(cfg.loss.anchor.get("min_weight", 0.01))
     anchor_uncertain = float(cfg.loss.anchor.get("uncertain_weight", 0.05))
+    label_smoothing = float(cfg.loss.get("label_smoothing", 0.0))
+    mixup_alpha = float(cfg.loss.get("mixup_alpha", 0.0))
+    num_classes = model.num_classes
 
     # 噪声硬处理：q0 硬丢弃阈值（启用时低可靠度样本不参与分类监督）
     noise_cfg = cfg.get("noise", None)
@@ -170,13 +173,26 @@ def train_robust(
             q0 = q0.to(device, non_blocking=True)
             z0 = z0.to(device, non_blocking=True)
 
+            # Mixup：混合输入与标签（软标签 one-hot）。只在 ce_plain 无锚定路径下使用，
+            # 否则混合图与原始 z0/q0 口径不一致（v3 锚定/可靠度路径默认 mixup_alpha=0）。
+            if mixup_alpha > 0.0:
+                lam = float(np.random.beta(mixup_alpha, mixup_alpha))
+                lam = max(lam, 1.0 - lam)
+                perm = torch.randperm(px.size(0), device=device)
+                px = lam * px + (1.0 - lam) * px[perm]
+                y_onehot = F.one_hot(labels, num_classes).float()
+                targets = lam * y_onehot + (1.0 - lam) * F.one_hot(labels[perm], num_classes).float()
+            else:
+                targets = labels
+
             with torch.amp.autocast("cuda", enabled=use_amp):
                 z, logits = model(px)
                 loss, parts = compute_total_loss(
-                    logits, labels, z, z0, q0,
+                    logits, targets, z, z0, q0,
                     supervised=supervised, gce_q=gce_q,
                     anchor_min=anchor_min, anchor_uncertain=anchor_uncertain,
                     hard_threshold=hard_threshold,
+                    label_smoothing=label_smoothing,
                 )
             loss = loss / accum
 

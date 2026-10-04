@@ -1,0 +1,106 @@
+# CAPR-CLIP V4：全量微调基线（破 71% 僵局）
+#
+# 与 V3 的差异（核心思路变化）：
+#   - finetune_mode: full —— 全量微调整个视觉塔，掀掉"冻结特征 + LoRA"的结构性天花板
+#   - 摘掉锚定（min/uncertain 权重置 0）与 hard-drop —— 这两个是 V3 封顶的主因
+#   - 损失换 ce_plain（无可靠度加权 CE）+ label smoothing + Mixup，靠数据增强/正则防过拟合
+#   - 噪声鲁棒性后置：先看全量微调能到哪，再按需把 q0/GCE 请回来
+#
+# 前置产物：split.csv / manifest.csv（分辨率无关，可从 v3 目录复制）
+#           features.npy（224，需重跑 stage1）、q0.csv（重跑 stage2，纯管线占位，本配置不用于损失）
+
+experiment:
+  name: capr_v4_fullft
+  seed: 42
+  output_dir: outputs/capr_v4_fullft
+
+data:
+  train_dir: data/train
+  test_list: data/test.txt
+  num_classes: 500
+  image_size: 224                # 224 起步，与 71.20%（aug25）同分辨率做干净对比；384 后续再试
+  allow_truncated_images: true
+
+# ---- Stage 0：数据审计与防泄漏 group split（分辨率无关，沿用 v3 同款）----
+audit:
+  manifest_path: null
+  anomaly_path: null
+  file_hash: sha256
+  phash_size: 8
+  near_dup_hamming: 8
+  group_split: true
+  val_ratio: 0.10
+  oof_folds: 3
+  head_quantile: 0.33
+  tail_quantile: 0.33
+  min_samples_for_split: 10
+
+# ---- Stage 1：冻结特征缓存 ----
+features:
+  cache_dir: null
+  backbone: ViT-B/32
+  weights_source: openai
+  batch_size: 64
+  num_workers: 4
+  knn_k: [20, 50]
+  use_faiss: true
+
+# ---- Stage 2：q0 可靠度系统（本配置不用于损失，仅满足管线产物依赖）----
+trust:
+  oof_folds: 3
+  knn_k: 20
+  use_oof_classifier: true
+  use_leave_one_out_prototype: true
+  use_mutual_knn: true
+  use_gmm: false
+  gmm_min_component: 100
+  normalize_within_class: true
+  signal_weights: {cls: 1.0, proto: 1.0, knn: 1.0}
+  conflict_lambda: 0.1
+  q_min: 0.0
+  min_effective_count: 5.0
+
+# ---- Stage 3：模型与损失 ----
+model:
+  backbone: ViT-B/32
+  classifier: cosine
+  finetune_mode: full            # full = 全量微调；lora = 原 V3 路径
+
+train:
+  head_warmup_epochs: 5
+  robust_epochs: 40             # 全量微调需更长调度；patience 拉大
+  early_stop_patience: 5
+  crt_epochs: 5
+  batch_size: 64
+  num_workers: 4
+  grad_accumulation_steps: 4
+  amp: true
+  grad_scaler_init_scale: 2048
+  optimizer: adamw
+  weight_decay: 0.05
+  grad_clip_norm: 1.0
+  lr: {classifier: 0.0001, backbone: 0.00003, layer_norm: 0.00003}
+  scheduler: {name: cosine, warmup_ratio: 0.05}
+
+loss:
+  supervised: ce_plain          # 无可靠度加权 CE；ce/gce = v2/v3 加权路径
+  label_smoothing: 0.1
+  mixup_alpha: 0.2
+  anchor:
+    min_weight: 0.0             # 关闭锚定（V3 封顶主因）
+    uncertain_weight: 0.0
+
+# ---- 噪声硬处理：关闭 ----
+noise:
+  hard_drop: false
+
+# ---- Stage 5：延迟长尾校准 ----
+long_tail:
+  method: crt
+  representation_sampling: natural
+
+inference:
+  checkpoint: null
+  center_crop: true
+  tta: false
+  output_csv: pred_results.csv

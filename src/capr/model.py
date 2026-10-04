@@ -73,6 +73,7 @@ class CAPRModel(nn.Module):
         cls_params: list[nn.Parameter] = []
         scale_params: list[nn.Parameter] = []
         lora_params: list[nn.Parameter] = []
+        backbone_params: list[nn.Parameter] = []
         ln_params: list[nn.Parameter] = []
         for name, p in self.named_parameters():
             if not p.requires_grad:
@@ -86,8 +87,8 @@ class CAPRModel(nn.Module):
             elif "layer_norm" in name:
                 ln_params.append(p)
             else:
-                # 兜底：任何遗漏的可训练参数并入 LoRA 组，避免静默漏训
-                lora_params.append(p)
+                # 兜底：全量微调时整个视觉塔（encoder/embeddings/visual_projection）都落这里
+                backbone_params.append(p)
 
         groups: list[dict] = []
         if cls_params:
@@ -96,6 +97,8 @@ class CAPRModel(nn.Module):
             groups.append({"params": scale_params, "lr": float(lr_cfg.get("classifier", 0.0005)), "weight_decay": 0.0})
         if lora_params:
             groups.append({"params": lora_params, "lr": float(lr_cfg.get("lora", 0.0001)), "weight_decay": weight_decay})
+        if backbone_params:
+            groups.append({"params": backbone_params, "lr": float(lr_cfg.get("backbone", lr_cfg.get("lora", 0.0001))), "weight_decay": weight_decay})
         if ln_params:
             groups.append({"params": ln_params, "lr": float(lr_cfg.get("layer_norm", 0.00001)), "weight_decay": 0.0})
         return groups
@@ -120,20 +123,30 @@ def build_model(
     for p in model.visual_projection.parameters():
         p.requires_grad = False
 
-    # 2) LoRA 注入（最后 4 层 Q/V）
-    lora_cfg = cfg.model.lora
-    layers_spec = lora_cfg.get("layers", "last_4")
-    targets = list(lora_cfg.get("targets", ["q_proj", "v_proj"]))
-    rank = int(lora_cfg.get("rank", 8))
-    alpha = int(lora_cfg.get("alpha", 16))
-    dropout = float(lora_cfg.get("dropout", 0.05))
+    finetune_mode = str(cfg.model.get("finetune_mode", "lora"))
 
-    num_layers = len(model.vision_model.encoder.layers)
-    layer_idxs = resolve_layers(num_layers, layers_spec)
-    apply_lora(model.vision_model.encoder, layer_idxs, targets, rank, alpha, dropout)
+    if finetune_mode == "full":
+        # 全量微调：解冻整个视觉塔（embeddings + 12 层 encoder + 最终 LN + visual_projection）。
+        # 不做 LoRA，让编码器自由学习细粒度判别特征；防过拟合交给数据增强/正则而非参数约束。
+        for p in model.vision_model.parameters():
+            p.requires_grad = True
+        for p in model.visual_projection.parameters():
+            p.requires_grad = True
+    else:
+        # 2) LoRA 注入（最后 4 层 Q/V）
+        lora_cfg = cfg.model.lora
+        layers_spec = lora_cfg.get("layers", "last_4")
+        targets = list(lora_cfg.get("targets", ["q_proj", "v_proj"]))
+        rank = int(lora_cfg.get("rank", 8))
+        alpha = int(lora_cfg.get("alpha", 16))
+        dropout = float(lora_cfg.get("dropout", 0.05))
 
-    # 3) 解冻最后四层 LayerNorm
-    unfreeze_layer_norms(model.vision_model.encoder, layer_idxs)
+        num_layers = len(model.vision_model.encoder.layers)
+        layer_idxs = resolve_layers(num_layers, layers_spec)
+        apply_lora(model.vision_model.encoder, layer_idxs, targets, rank, alpha, dropout)
+
+        # 3) 解冻最后四层 LayerNorm
+        unfreeze_layer_norms(model.vision_model.encoder, layer_idxs)
 
     # 4) 上设备（仅模型持有的部分；text tower 已在 clip 上，del 后释放 CPU 内存）
     device_obj = torch.device("cuda" if (device == "cuda" and torch.cuda.is_available()) else "cpu")

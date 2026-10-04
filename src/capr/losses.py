@@ -22,6 +22,18 @@ def weighted_ce(logits: torch.Tensor, targets: torch.Tensor, q0: torch.Tensor) -
     return (q0 * ce).sum() / denom
 
 
+def plain_ce(logits: torch.Tensor, targets: torch.Tensor, label_smoothing: float = 0.0) -> torch.Tensor:
+    """无可靠度加权的交叉熵。
+
+    targets 为 int 硬标签时走 F.cross_entropy（可带 label smoothing）；
+    targets 为 float 软标签（mixup 后的 one-hot 混合）时走 -Σ y·log_softmax。
+    """
+    if targets.is_floating_point():
+        logp = F.log_softmax(logits, dim=-1)
+        return -(targets * logp).sum(dim=-1).mean()
+    return F.cross_entropy(logits, targets, label_smoothing=label_smoothing)
+
+
 def gce_loss(
     logits: torch.Tensor, targets: torch.Tensor, q: float = 0.7
 ) -> torch.Tensor:
@@ -71,12 +83,19 @@ def compute_total_loss(
     anchor_min: float = 0.01,
     anchor_uncertain: float = 0.05,
     hard_threshold: float | None = None,
+    label_smoothing: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """统一损失入口，返回 (总损失, 分项标量用于日志)。
 
     hard_threshold：q0 硬丢弃阈值。启用时 q0 低于该值的样本监督损失权重
     置 0（视为噪声，不参与分类监督）；anchor 损失不受影响，仍对这些样本
     施加更强锚定（低 q0 → λ 更大），两者互补。
+
+    supervised 取值：
+      - "ce"       可靠度加权 CE（v2 默认，按 q0 加权）
+      - "gce"      可靠度加权 GCE（v3 默认）
+      - "ce_plain" 无可靠度加权 CE + label smoothing（全量微调基线用，
+                   支持 mixup 软标签 targets）
     """
     # 硬丢弃：仅在监督项上对低可靠度样本置 0 权重
     q_sup = q0
@@ -88,8 +107,10 @@ def compute_total_loss(
         l_sup = weighted_ce(logits, targets, q_sup)
     elif supervised == "gce":
         l_sup = weighted_gce(logits, targets, q_sup, q=gce_q)
+    elif supervised == "ce_plain":
+        l_sup = plain_ce(logits, targets, label_smoothing=label_smoothing)
     else:
-        raise ValueError(f"未知监督损失: {supervised}（支持 ce/gce）")
+        raise ValueError(f"未知监督损失: {supervised}（支持 ce/gce/ce_plain）")
 
     l_anchor = anchor_loss(z, z0, q0, lambda_min=anchor_min, lambda_uncertain=anchor_uncertain)
     total = l_sup + l_anchor
