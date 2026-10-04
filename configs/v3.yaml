@@ -69,7 +69,7 @@ model:
 
 train:
   head_warmup_epochs: 5
-  robust_epochs: 15
+  robust_epochs: 25             # 15 → 25：best 落在 ep15 说明未训够，配合增强延长训练
   early_stop_patience: 3             # 验证集连续 N epoch 无提升则早停
   crt_epochs: 5
   batch_size: 64

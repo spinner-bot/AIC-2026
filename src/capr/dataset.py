@@ -18,9 +18,11 @@ import torchvision.transforms as T
 
 _train_aug = T.Compose(
     [
-        T.RandomResizedCrop(224, scale=(0.6, 1.0)),
+        T.RandomResizedCrop(224, scale=(0.5, 1.0)),
         T.RandomHorizontalFlip(p=0.5),
-        T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
+        # RandAugment：细粒度识别标配，比单一 ColorJitter 提供更强的变换多样性，
+        # 同时作为正则化抑制噪声标签过拟合（含 Color/Contrast/Brightness 等子操作）。
+        T.RandAugment(num_ops=2, magnitude=9),
     ]
 )
 
