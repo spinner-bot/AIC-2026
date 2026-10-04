@@ -61,10 +61,10 @@ model:
   classifier: cosine
   lora:
     enabled: true
-    layers: last_4
-    targets: [q_proj, v_proj]
-    rank: 8
-    alpha: 16
+    layers: all                  # last_4 → all：全 12 层注入，充分适配细粒度特征
+    targets: [q_proj, k_proj, v_proj]   # 加 k_proj（细粒度需要更强注意力适配）
+    rank: 16                     # 8 → 16（容量扩容）
+    alpha: 32                    # 16 → 32（保持 scaling=alpha/rank=2 与旧配置一致）
     dropout: 0.05
 
 train:
