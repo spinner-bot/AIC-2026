@@ -102,22 +102,44 @@ def collate_fn(mode: str):
     return _collate_train if mode == "train" else _collate_val
 
 
+def compute_dup_conflict_mask(split: pd.DataFrame) -> pd.Series:
+    """标记 exact-dup 标签冲突样本（确定性噪声，True=噪声）。
+
+    完全重复（file_hash 相同）的图应属同一类；若同一 hash 出现在 2+ 个不同类别，
+    则这些样本中至少有一份标签错误。整组标记为冲突，训练时可剔除。
+    """
+    hashes = split["file_hash"]
+    dup = split[hashes.duplicated(keep=False) & hashes.notna()]
+    if len(dup) == 0:
+        return pd.Series(False, index=split.index)
+    conflict_hashes = dup.groupby("file_hash")["class_idx"].nunique()
+    conflict_hashes = conflict_hashes[conflict_hashes > 1].index
+    return split["file_hash"].isin(conflict_hashes)
+
+
 def build_datasets(
     split: pd.DataFrame,
     q0: pd.DataFrame,
     feats: np.ndarray,
     processor: CLIPProcessor,
     image_size: int = 224,
+    train_keep: pd.Series | None = None,
 ) -> tuple[TrainDataset, ValDataset, pd.DataFrame, pd.DataFrame]:
-    """按 fold 划分训练/验证，并返回各自样本表（含 class_idx/q0 列）。"""
-    train_mask = split["fold"] != "val"
-    train_items = split[train_mask].copy()
-    val_items = split[~train_mask].copy()
+    """按 fold 划分训练/验证，并返回各自样本表（含 class_idx/q0 列）。
+
+    train_keep：可选训练保留掩码（True=保留，与 split 行对齐）。默认训练=所有
+    非 val 样本；传入后可在训练集中剔除确定性噪声（如 exact-dup 标签冲突样本）。
+    """
+    val_mask = split["fold"] == "val"
+    if train_keep is None:
+        train_keep = ~val_mask
+    train_items = split[train_keep].copy()
+    val_items = split[val_mask].copy()
 
     # q0 列来自 q0.csv（训练样本有值，val 为 NaN）
-    train_items["q0"] = q0.loc[train_mask, "q0"].values
+    train_items["q0"] = q0.loc[train_keep, "q0"].values
 
-    z0_train = feats[train_mask.values]
+    z0_train = feats[train_keep.values]
 
     train_ds = TrainDataset(train_items, z0_train, processor, image_size=image_size)
     val_ds = ValDataset(val_items, processor)

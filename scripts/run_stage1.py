@@ -19,12 +19,13 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.capr.config import load_config
+from src.capr.config import load_config, set_seed
 from src.capr.features import extract_features, save_features
 
 
 def main(config_path: str, device: str) -> None:
     cfg = load_config(config_path)
+    set_seed(int(cfg.experiment.get("seed", 42)))
 
     manifest_path = cfg.path(cfg.audit.get("manifest_path")) or cfg.path(cfg.experiment.output_dir) / "manifest.csv"
     if not manifest_path.exists():

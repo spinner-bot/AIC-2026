@@ -15,13 +15,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.capr.config import load_config
+from src.capr.config import load_config, set_seed
 from src.capr.group_split import run_group_split
 from src.capr.manifest import build_manifest, save_manifest
 
 
 def main(config_path: str) -> None:
     cfg = load_config(config_path)
+    set_seed(int(cfg.experiment.get("seed", 42)))
 
     print("== Stage 0.1 数据审计 ==")
     manifest, anomalies = build_manifest(cfg)

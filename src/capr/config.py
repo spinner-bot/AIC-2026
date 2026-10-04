@@ -62,3 +62,21 @@ def load_config(path: str | Path) -> Config:
 
 def project_root() -> Path:
     return _PROJECT_ROOT
+
+
+def set_seed(seed: int) -> None:
+    """固定随机种子（python / numpy / torch / cuda），保证训练可复现。
+
+    惰性 import 避免给 config 模块引入 torch 顶层依赖。若要 bit-exact 复现，
+    还需额外设置 torch.backends.cudnn.deterministic=True（代价是训练变慢），
+    竞赛的可复现复核只需结果级一致，故此处不强制开启。
+    """
+    import random
+
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)

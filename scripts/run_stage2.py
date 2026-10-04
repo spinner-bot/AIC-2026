@@ -21,7 +21,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.capr.config import load_config
+from src.capr.config import load_config, set_seed
 from src.capr.reliability import compute_q0
 
 
@@ -48,6 +48,7 @@ def _print_report(split: pd.DataFrame, q0: np.ndarray, signals: dict, num_classe
 
 def main(config_path: str) -> None:
     cfg = load_config(config_path)
+    set_seed(int(cfg.experiment.get("seed", 42)))
     out_dir = cfg.path(cfg.experiment.output_dir)
 
     split_path = out_dir / "split.csv"

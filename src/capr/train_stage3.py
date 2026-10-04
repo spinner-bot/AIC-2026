@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader
 from transformers import CLIPProcessor
 
 from .config import Config, project_root
-from .dataset import build_datasets, collate_fn
+from .dataset import build_datasets, collate_fn, compute_dup_conflict_mask
 from .losses import compute_total_loss
 from .model import build_model, save_checkpoint
 
@@ -268,18 +268,25 @@ def main(cfg: Config, device: str = "cuda", epochs: int | None = None) -> float:
         crop_size={"height": image_size, "width": image_size},
     )
 
+    # 训练样本保留掩码：默认全训练；可选剔除 exact-dup 标签冲突的确定性噪声
+    train_keep = split["fold"] != "val"
+    if cfg.data.get("exclude_dup_conflict", False):
+        dup_conflict = compute_dup_conflict_mask(split)
+        train_keep = train_keep & ~dup_conflict
+        n_dropped = int((dup_conflict & (split["fold"] != "val")).sum())
+        logger.info(f"  剔除 exact-dup 标签冲突噪声 {n_dropped} 张训练样本")
+
     train_ds, val_ds, train_items, _ = build_datasets(
-        split, q0, feats, processor, image_size=image_size
+        split, q0, feats, processor, image_size=image_size, train_keep=train_keep
     )
     logger.info(f"== Stage 3 MVP 微调 ==")
     logger.info(f"  训练 {len(train_ds)} / 验证 {len(val_ds)} / 类别 {num_classes}")
 
     model = build_model(cfg, num_classes, device=device)
 
-    # 1) 分类头预热（缓存特征）
-    train_mask = (split["fold"] != "val").values
-    z0_train = feats[train_mask]
-    labels_train = split.loc[train_mask, "class_idx"].values.astype(int)
+    # 1) 分类头预热（缓存特征，与训练同口径）
+    z0_train = feats[train_keep.values]
+    labels_train = split.loc[train_keep, "class_idx"].values.astype(int)
     train_head_warmup(model, z0_train, labels_train, cfg, device_obj, logger)
 
     # 2) robust 微调

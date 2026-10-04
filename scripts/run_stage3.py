@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.capr.config import load_config
+from src.capr.config import load_config, set_seed
 from src.capr.train_stage3 import main
 
 
@@ -29,4 +29,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    set_seed(int(cfg.experiment.get("seed", 42)))
     main(cfg, device=args.device, epochs=args.epochs)
