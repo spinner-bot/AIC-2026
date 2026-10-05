@@ -16,15 +16,21 @@ from transformers import CLIPProcessor
 import torchvision.transforms as T
 
 
-def make_train_aug(image_size: int = 224) -> T.Compose:
-    """训练增强（分辨率可配，供高分辨率实验用）。"""
+def make_train_aug(
+    image_size: int = 224, crop_min: float = 0.5, ra_magnitude: int = 9
+) -> T.Compose:
+    """训练增强（分辨率/裁剪下界/RA 强度可配，供消融实验用）。
+
+    细粒度识别里裁剪下界过低会切掉判别部位（鸟喙/花蕊等），
+    RA magnitude 过高会破坏细粒度纹理，二者应作为消融变量。
+    """
     return T.Compose(
         [
-            T.RandomResizedCrop(image_size, scale=(0.5, 1.0)),
+            T.RandomResizedCrop(image_size, scale=(crop_min, 1.0)),
             T.RandomHorizontalFlip(p=0.5),
             # RandAugment：细粒度识别标配，比单一 ColorJitter 提供更强的变换多样性，
             # 同时作为正则化抑制噪声标签过拟合（含 Color/Contrast/Brightness 等子操作）。
-            T.RandAugment(num_ops=2, magnitude=9),
+            T.RandAugment(num_ops=2, magnitude=ra_magnitude),
         ]
     )
 
@@ -43,12 +49,18 @@ class TrainDataset(Dataset):
         z0: np.ndarray,
         processor: CLIPProcessor,
         image_size: int = 224,
+        crop_min: float = 0.5,
+        ra_magnitude: int = 9,
         augment: bool = True,
     ) -> None:
         self.items = items.reset_index(drop=True)
         self.z0 = torch.from_numpy(np.asarray(z0, dtype=np.float32))
         self.processor = processor
-        self.aug = make_train_aug(image_size) if augment else None
+        self.aug = (
+            make_train_aug(image_size, crop_min=crop_min, ra_magnitude=ra_magnitude)
+            if augment
+            else None
+        )
 
     def __len__(self) -> int:
         return len(self.items)
@@ -117,18 +129,43 @@ def compute_dup_conflict_mask(split: pd.DataFrame) -> pd.Series:
     return split["file_hash"].isin(conflict_hashes)
 
 
+def compute_dup_sample_weight(split: pd.DataFrame) -> pd.Series:
+    """exact-dup 标签一致组按 1/组大小 降权，避免过度采样重复样本。
+
+    冲突组（同 hash 多标签）不在此处理——由 exclude_dup_conflict 整体剔除。
+    返回与 split 行对齐的权重（非重复=1.0，一致重复组=1/group_size）。
+    """
+    w = pd.Series(1.0, index=split.index)
+    hashes = split["file_hash"]
+    dup = split[hashes.duplicated(keep=False) & hashes.notna()]
+    if len(dup) == 0:
+        return w
+    consistent = dup.groupby("file_hash")["class_idx"].nunique()
+    consistent_hashes = consistent[consistent == 1].index
+    if len(consistent_hashes) == 0:
+        return w
+    sizes = split[split["file_hash"].isin(consistent_hashes)].groupby("file_hash").size()
+    for h, gsize in sizes.items():
+        w[split["file_hash"] == h] = 1.0 / gsize
+    return w
+
+
 def build_datasets(
     split: pd.DataFrame,
     q0: pd.DataFrame,
     feats: np.ndarray,
     processor: CLIPProcessor,
     image_size: int = 224,
+    crop_min: float = 0.5,
+    ra_magnitude: int = 9,
     train_keep: pd.Series | None = None,
+    dup_downweight: bool = False,
 ) -> tuple[TrainDataset, ValDataset, pd.DataFrame, pd.DataFrame]:
     """按 fold 划分训练/验证，并返回各自样本表（含 class_idx/q0 列）。
 
     train_keep：可选训练保留掩码（True=保留，与 split 行对齐）。默认训练=所有
     非 val 样本；传入后可在训练集中剔除确定性噪声（如 exact-dup 标签冲突样本）。
+    dup_downweight：对 exact-dup 标签一致组按 1/组大小 降权（写入 sample_weight 列）。
     """
     val_mask = split["fold"] == "val"
     if train_keep is None:
@@ -139,8 +176,15 @@ def build_datasets(
     # q0 列来自 q0.csv（训练样本有值，val 为 NaN）
     train_items["q0"] = q0.loc[train_keep, "q0"].values
 
+    # exact-dup 标签一致组降权（可选）
+    if dup_downweight:
+        train_items["sample_weight"] = compute_dup_sample_weight(split).loc[train_keep].values
+
     z0_train = feats[train_keep.values]
 
-    train_ds = TrainDataset(train_items, z0_train, processor, image_size=image_size)
+    train_ds = TrainDataset(
+        train_items, z0_train, processor,
+        image_size=image_size, crop_min=crop_min, ra_magnitude=ra_magnitude,
+    )
     val_ds = ValDataset(val_items, processor)
     return train_ds, val_ds, train_items, val_items

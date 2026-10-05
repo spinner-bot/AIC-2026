@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -99,10 +100,19 @@ def extract_features(
     return feats, subset
 
 
+def feature_fingerprint(cfg: Config) -> str:
+    """特征口径指纹：影响冻结特征提取的预处理参数。
+
+    若 image_size 变化却沿用旧缓存，head warmup 会用口径不一致的特征。
+    指纹用于 save/load 两端校验（save_features 写入，train_stage3 校验）。
+    """
+    return f"im{int(cfg.data.get('image_size', 224))}"
+
+
 def save_features(
     cfg: Config, feats: np.ndarray, subset: pd.DataFrame
 ) -> tuple[Path, Path]:
-    """落盘 features.npy 与 index.csv，返回两个文件路径。"""
+    """落盘 features.npy 与 index.csv（及指纹 meta.json），返回特征/索引路径。"""
     out_dir = cfg.path(cfg.features.get("cache_dir")) or cfg.path(cfg.experiment.output_dir) / "features"
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -111,4 +121,7 @@ def save_features(
 
     np.save(feat_path, feats)
     subset.to_csv(index_path, index=False)
+
+    meta = {"fingerprint": feature_fingerprint(cfg), "image_size": int(cfg.data.get("image_size", 224))}
+    (out_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
     return feat_path, index_path

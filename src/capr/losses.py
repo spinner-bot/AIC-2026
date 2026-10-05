@@ -26,9 +26,13 @@ def plain_ce(logits: torch.Tensor, targets: torch.Tensor, label_smoothing: float
     """无可靠度加权的交叉熵。
 
     targets 为 int 硬标签时走 F.cross_entropy（可带 label smoothing）；
-    targets 为 float 软标签（mixup 后的 one-hot 混合）时走 -Σ y·log_softmax。
+    targets 为 float 软标签（mixup 后的 one-hot 混合）时走 -Σ y·log_softmax，
+    并对混合软标签同样叠加 label smoothing（否则 mixup 下平滑配置失效）。
     """
     if targets.is_floating_point():
+        if label_smoothing > 0.0:
+            n = targets.size(-1)
+            targets = (1.0 - label_smoothing) * targets + label_smoothing / n
         logp = F.log_softmax(logits, dim=-1)
         return -(targets * logp).sum(dim=-1).mean()
     return F.cross_entropy(logits, targets, label_smoothing=label_smoothing)
@@ -37,7 +41,11 @@ def plain_ce(logits: torch.Tensor, targets: torch.Tensor, label_smoothing: float
 def gce_loss(
     logits: torch.Tensor, targets: torch.Tensor, q: float = 0.7
 ) -> torch.Tensor:
-    """广义交叉熵：L_GCE = (1 - p_y^q) / q（q 越小越鲁棒，0 < q <= 1）。"""
+    """广义交叉熵：L_GCE = (1 - p_y^q) / q（0 < q <= 1）。
+
+    q→0 趋近 CE（对数损失，对噪声敏感、拟合强）；
+    q→1 趋近 MAE（线性损失，更抗噪）。故抗噪应增大 q，而非减小。
+    """
     probs = F.softmax(logits, dim=-1)
     p_y = probs.gather(1, targets.unsqueeze(1)).squeeze(1)
     return ((1.0 - p_y.clamp(min=_EPS) ** q) / q).mean()

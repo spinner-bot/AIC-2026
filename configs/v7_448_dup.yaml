@@ -1,0 +1,105 @@
+# CAPR-CLIP V7：全量微调 @ 448 + 四项改进叠加（冲高分）
+#
+# 相对 v6_384_dup 的改动（正交、均可单独开关以做消融）：
+#   1. image_size 384 → 448：patch 12×12 → 14×14，细粒度判别力再上一档
+#   2. crop_min 0.5 → 0.8 + ra_magnitude 9 → 5：降低破坏性增强，避免裁掉判别部位
+#   3. dup_downweight true：exact-dup 标签一致组按 1/组大小 降权（v6 只删了冲突组）
+#   4. layerwise_lr_decay 0.8：encoder 逐层衰减 lr（顶层 3e-5，底层 ×0.8^11）
+#   5. Mixup 软标签下 label_smoothing 已修复生效（losses.py）
+#
+# 显存：448 序列更长，batch 64→32、grad_accum 4→8，有效 batch 保持 256 与 v6 一致。
+
+experiment:
+  name: capr_v7_448_dup
+  seed: 42
+  output_dir: outputs/capr_v7_448_dup
+
+data:
+  train_dir: data/train
+  test_list: data/test.txt
+  num_classes: 500
+  image_size: 448
+  allow_truncated_images: true
+  exclude_dup_conflict: true     # 剔除 exact-dup 标签冲突的确定性噪声（同 v6）
+  dup_downweight: true           # 新增：exact-dup 标签一致组按 1/组大小 降权
+  crop_min: 0.8                  # 新增：裁剪下界（细粒度保护，默认 0.5）
+  ra_magnitude: 5                # 新增：RandAugment 强度（默认 9）
+
+audit:
+  manifest_path: null
+  anomaly_path: null
+  file_hash: sha256
+  phash_size: 8
+  near_dup_hamming: 8
+  group_split: true
+  val_ratio: 0.10
+  oof_folds: 3
+  head_quantile: 0.33
+  tail_quantile: 0.33
+  min_samples_for_split: 10
+
+features:
+  cache_dir: null
+  backbone: ViT-B/32
+  weights_source: openai
+  batch_size: 64
+  num_workers: 4
+  knn_k: [20, 50]
+  use_faiss: true
+
+trust:
+  oof_folds: 3
+  knn_k: 20
+  use_oof_classifier: true
+  use_leave_one_out_prototype: true
+  use_mutual_knn: true
+  use_gmm: false
+  gmm_min_component: 100
+  normalize_within_class: true
+  signal_weights: {cls: 1.0, proto: 1.0, knn: 1.0}
+  conflict_lambda: 0.1
+  q_min: 0.0
+  min_effective_count: 5.0
+
+model:
+  backbone: ViT-B/32
+  classifier: cosine
+  finetune_mode: full
+
+train:
+  head_warmup_epochs: 5
+  robust_epochs: 50
+  early_stop_patience: 8
+  crt_epochs: 5
+  batch_size: 32
+  num_workers: 4
+  grad_accumulation_steps: 8
+  amp: true
+  grad_scaler_init_scale: 2048
+  optimizer: adamw
+  weight_decay: 0.05
+  grad_clip_norm: 1.0
+  layerwise_lr_decay: 0.8        # 新增：encoder 逐层 lr 衰减（null=关闭）
+  lr: {classifier: 0.0001, backbone: 0.00003, layer_norm: 0.00003}
+  scheduler: {name: cosine, warmup_ratio: 0.05}
+
+loss:
+  supervised: ce_plain
+  label_smoothing: 0.1
+  mixup_alpha: 0.2
+  anchor:
+    min_weight: 0.0
+    uncertain_weight: 0.0
+
+noise:
+  hard_drop: false
+
+long_tail:
+  method: crt
+  representation_sampling: natural
+
+inference:
+  checkpoint: null
+  center_crop: true
+  tta: false
+  output_csv: pred_results.csv

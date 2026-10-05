@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 
 import torch
@@ -64,17 +65,33 @@ class CAPRModel(nn.Module):
         z = self._image_embeds(pixel_values)
         return z, self.classify(z)
 
-    def param_groups(self, lr_cfg: dict, weight_decay: float = 0.05) -> list[dict]:
-        """按 lr_cfg（classifier/lora/layer_norm）分组可训练参数。
+    def param_groups(
+        self,
+        lr_cfg: dict,
+        weight_decay: float = 0.05,
+        layerwise_decay: float | None = None,
+    ) -> list[dict]:
+        """按 lr_cfg（classifier/lora/layer_norm/backbone）分组可训练参数。
 
         logit_scale 与 LayerNorm 不施加 weight_decay（前者衰减会导致
         exp(logit_scale) 塌缩到 0，后者本身无需正则）。
+
+        layerwise_decay：非 None 时（如 0.8），full-ft 的 encoder 按层衰减学习率——
+        顶层（最后一层）用 backbone lr，向底层逐层 ×layerwise_decay；
+        embeddings / visual_projection 用最低层 lr。仅对 finetune_mode=full 有意义。
         """
         cls_params: list[nn.Parameter] = []
         scale_params: list[nn.Parameter] = []
         lora_params: list[nn.Parameter] = []
         backbone_params: list[nn.Parameter] = []
         ln_params: list[nn.Parameter] = []
+
+        num_layers = len(self.vision_model.encoder.layers)
+        layer_buckets: dict[int, list[nn.Parameter]] | None = None
+        other_backbone: list[nn.Parameter] = []
+        if layerwise_decay is not None:
+            layer_buckets = {i: [] for i in range(num_layers)}
+
         for name, p in self.named_parameters():
             if not p.requires_grad:
                 continue
@@ -86,9 +103,18 @@ class CAPRModel(nn.Module):
                 lora_params.append(p)
             elif "layer_norm" in name:
                 ln_params.append(p)
+            elif layer_buckets is not None:
+                m = re.search(r"encoder\.layers\.(\d+)", name)
+                if m:
+                    layer_buckets[int(m.group(1))].append(p)
+                else:
+                    # embeddings / visual_projection 等非 encoder-layer 参数
+                    other_backbone.append(p)
             else:
                 # 兜底：全量微调时整个视觉塔（encoder/embeddings/visual_projection）都落这里
                 backbone_params.append(p)
+
+        backbone_lr = float(lr_cfg.get("backbone", lr_cfg.get("lora", 0.0001)))
 
         groups: list[dict] = []
         if cls_params:
@@ -97,8 +123,15 @@ class CAPRModel(nn.Module):
             groups.append({"params": scale_params, "lr": float(lr_cfg.get("classifier", 0.0005)), "weight_decay": 0.0})
         if lora_params:
             groups.append({"params": lora_params, "lr": float(lr_cfg.get("lora", 0.0001)), "weight_decay": weight_decay})
-        if backbone_params:
-            groups.append({"params": backbone_params, "lr": float(lr_cfg.get("backbone", lr_cfg.get("lora", 0.0001))), "weight_decay": weight_decay})
+        if layer_buckets is not None:
+            for idx in range(num_layers):
+                depth = num_layers - 1 - idx  # 顶层（最后一层）depth=0，lr 最高
+                lr = backbone_lr * (layerwise_decay ** depth)
+                groups.append({"params": layer_buckets[idx], "lr": lr, "weight_decay": weight_decay})
+            if other_backbone:
+                groups.append({"params": other_backbone, "lr": backbone_lr * (layerwise_decay ** (num_layers - 1)), "weight_decay": weight_decay})
+        elif backbone_params:
+            groups.append({"params": backbone_params, "lr": backbone_lr, "weight_decay": weight_decay})
         if ln_params:
             groups.append({"params": ln_params, "lr": float(lr_cfg.get("layer_norm", 0.00001)), "weight_decay": 0.0})
         return groups

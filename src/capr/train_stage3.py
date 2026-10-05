@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import time
@@ -18,7 +19,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from transformers import CLIPProcessor
 
 from .config import Config, project_root
@@ -117,6 +118,8 @@ def train_robust(
     """完整 LoRA 微调：可靠度加权 CE/GCE + 锚定。返回 best val Top-1。"""
     lr_cfg = cfg.train.lr.to_dict()
     wd = float(cfg.train.get("weight_decay", 0.05))
+    layerwise_decay = cfg.train.get("layerwise_lr_decay", None)
+    layerwise_decay = float(layerwise_decay) if layerwise_decay is not None else None
     grad_clip = float(cfg.train.get("grad_clip_norm", 1.0))
     accum = int(cfg.train.get("grad_accumulation_steps", 4))
     use_amp = bool(cfg.train.get("amp", True)) and device.type == "cuda"
@@ -142,7 +145,7 @@ def train_robust(
     warmup_ratio = float(cfg.train.scheduler.get("warmup_ratio", 0.05))
     warmup_steps = int(total_steps * warmup_ratio)
 
-    opt = torch.optim.AdamW(model.param_groups(lr_cfg, weight_decay=wd))
+    opt = torch.optim.AdamW(model.param_groups(lr_cfg, weight_decay=wd, layerwise_decay=layerwise_decay))
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda=lambda s: _lr_lambda(s, warmup_steps, total_steps))
     # fp16 下梯度 × init_scale 过大时会溢出产生 NaN（而非 inf），GradScaler 只检测 inf
     # 无法自愈，因此用保守初始值（scaler 训练中会自适应增长到合适值）。
@@ -255,6 +258,17 @@ def main(cfg: Config, device: str = "cuda", epochs: int | None = None) -> float:
         if not p.exists():
             raise FileNotFoundError(f"前置产物缺失: {p}（先运行 run_stage0/1/2）")
 
+    # 校验特征缓存口径：image_size 变化时禁止复用旧特征（否则 head warmup 口径漂移）
+    meta_path = feat_dir / "meta.json"
+    if meta_path.exists():
+        saved_fp = json.loads(meta_path.read_text(encoding="utf-8")).get("fingerprint")
+        expected_fp = f"im{int(cfg.data.get('image_size', 224))}"
+        if saved_fp != expected_fp:
+            raise RuntimeError(
+                f"特征缓存口径不一致：缓存 {saved_fp} vs 配置 {expected_fp}。"
+                f"请先重跑 run_stage1.py（{feat_path}）。"
+            )
+
     split = pd.read_csv(split_path)
     q0 = pd.read_csv(q0_path)
     feats = np.load(feat_path)
@@ -262,6 +276,9 @@ def main(cfg: Config, device: str = "cuda", epochs: int | None = None) -> float:
 
     num_classes = int(split["class_idx"].max()) + 1
     image_size = int(cfg.data.get("image_size", 224))
+    crop_min = float(cfg.data.get("crop_min", 0.5))
+    ra_magnitude = int(cfg.data.get("ra_magnitude", 9))
+    dup_downweight = bool(cfg.data.get("dup_downweight", False))
     processor = CLIPProcessor.from_pretrained(
         str(project_root() / _CLIP_MODEL_DIR),
         size={"height": image_size, "width": image_size},
@@ -277,7 +294,9 @@ def main(cfg: Config, device: str = "cuda", epochs: int | None = None) -> float:
         logger.info(f"  剔除 exact-dup 标签冲突噪声 {n_dropped} 张训练样本")
 
     train_ds, val_ds, train_items, _ = build_datasets(
-        split, q0, feats, processor, image_size=image_size, train_keep=train_keep
+        split, q0, feats, processor,
+        image_size=image_size, crop_min=crop_min, ra_magnitude=ra_magnitude,
+        train_keep=train_keep, dup_downweight=dup_downweight,
     )
     logger.info(f"== Stage 3 MVP 微调 ==")
     logger.info(f"  训练 {len(train_ds)} / 验证 {len(val_ds)} / 类别 {num_classes}")
@@ -292,9 +311,18 @@ def main(cfg: Config, device: str = "cuda", epochs: int | None = None) -> float:
     # 2) robust 微调
     bs = int(cfg.train.get("batch_size", 64))
     num_workers = int(cfg.train.get("num_workers", 0))
-    train_loader = DataLoader(
-        train_ds, batch_size=bs, shuffle=True, num_workers=num_workers, collate_fn=collate_fn("train")
-    )
+    if dup_downweight:
+        weights = torch.as_tensor(train_items["sample_weight"].values, dtype=torch.float64)
+        sampler = WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
+        train_loader = DataLoader(
+            train_ds, batch_size=bs, sampler=sampler,
+            num_workers=num_workers, collate_fn=collate_fn("train"),
+        )
+    else:
+        train_loader = DataLoader(
+            train_ds, batch_size=bs, shuffle=True,
+            num_workers=num_workers, collate_fn=collate_fn("train"),
+        )
     val_loader = DataLoader(
         val_ds, batch_size=bs, shuffle=False, num_workers=num_workers, collate_fn=collate_fn("val")
     )
